@@ -119,25 +119,39 @@ def main():
             col3, col4 = st.columns(2)
 
             with col3:
-                with st.spinner("Generating vocabulary list..."):
-                    vocab_list = get_vocab(chunks)
                 st.subheader("Vocabulary List:")
                 with st.expander("View Vocabulary List"):
-                    st.markdown(vocab_list)
-
+                    placeholder_v = st.empty()
+                    vocab_acc = ""
+                    for partial in get_vocab_stream(chunks):
+                        vocab_acc = partial
+                        placeholder_v.markdown(partial + " ▌")
+                    # final update without cursor
+                    placeholder_v.markdown(vocab_acc)
+                    vocab_list = vocab_acc
             with col4:
-                with st.spinner("Extracting grammar points..."):
-                    grammar_points = extract_grammar(chunks)
                 st.subheader("Grammar Points:")
                 with st.expander("View Grammar Points"):
-                    st.markdown(grammar_points)
-
-            with st.spinner("Creating exercises..."):
-                exercises = create_exercises(vocab_list, grammar_points)
+                    placeholder_g = st.empty()
+                    grammar_acc = ""
+                    for partial in extract_grammar_stream(chunks):
+                        grammar_acc = partial
+                        placeholder_g.markdown(partial + " ▌")
+                    # final update without cursor
+                    placeholder_g.markdown(grammar_acc)
+                    grammar_points = grammar_acc
+            # -----------------------------------------------------------------
+            # Generate exercises based on vocabulary and grammar points
             st.subheader("Exercises:")
             with st.expander("View Exercises"):
-                st.markdown(exercises)
-            # Additional processing to generate a summary can be added here
+                placeholder_e = st.empty()
+                exercises_acc = ""
+                for partial in create_exercises_stream(vocab_list, grammar_points):
+                    exercises_acc = partial
+                    placeholder_e.markdown(partial + " ▌")
+                # final update without cursor
+                placeholder_e.markdown(exercises_acc)
+                exercises = exercises_acc
 
 if __name__ == "__main__":
     main()

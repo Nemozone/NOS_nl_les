@@ -6,7 +6,7 @@ from langchain.tools import Tool
 from langchain.agents import initialize_agent, AgentType
 from tqdm import tqdm
 from langchain_ollama.chat_models import ChatOllama  # for local streaming with Ollama
-
+import streamlit as st
 from typing import List
 
 
@@ -174,78 +174,6 @@ def english_translate(transcript_text: str) -> str:
     # Join the per‑chunk translations into one continuous block
     return "\n".join(translations)
 
-# ---------------------------------------------------------------------------
-# Streaming version – keeps chunk‑by‑chunk processing *and* preserves context
-# while forbidding meta lines like “Here is the translation”.
-# ---------------------------------------------------------------------------
-def english_translate_stream(transcript_text: str):
-    """
-    Stream an English translation of the Dutch transcript, yielding the
-    progressively growing text so Streamlit can update the UI live.
-
-    Strategy
-    --------
-    1. Split the Dutch text into overlapping chunks (1500 chars, 150 overlap)
-       to stay within llama3's context window.
-    2. For every chunk **after the first** we pass the tail (≈120 words) of the
-       translation we have already produced as an *assistant* message so the
-       model keeps context and style.
-    3. While streaming tokens we suppress any leading meta phrases the model
-       might try to insert (e.g. “Here is the translation:”).
-    4. We accumulate and yield the full translation so far after every token.
-    """
-    # --- 1. Prepare chunker and model --------------------------------------
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=0)
-    chat_llm = ChatOllama(model="llama3", temperature=0)
-
-    system_msg = (
-        "You are a professional Dutch-to-English translator. "
-        "Translate any Dutch text sentence-by-sentence in the same order. "
-        "NEVER prepend statements like 'Here is the translation'. "
-        "Output *only* the pure English translation."
-        "Do NOT omit or repeat anything. "
-    )
-
-    partial = ""
-    prev_tail = ""  # last ≈120 words of existing translation for context
-
-    for i, dutch_chunk in enumerate(splitter.split_text(transcript_text)):
-        # --- 2. Build context‑aware message list ---------------------------
-        messages = [("system", system_msg)]
-        if i > 0:
-            messages.append(
-                ("assistant", prev_tail)
-            )  # give model a slice of what it wrote before
-        messages.append(
-            ("user", f"Translate the following Dutch text to English:\n\n{dutch_chunk}")
-        )
-
-        # --- 3. Stream this chunk -----------------------------------------
-        first_real_token_seen = False
-        buffer_this_chunk = ""
-
-        for msg_piece in chat_llm.stream(messages):
-            token = getattr(msg_piece, "content", "")
-            if not token:
-                continue
-
-            # Remove meta chatter at chunk starts
-            if not first_real_token_seen:
-                # Strip common unwanted prefaces
-                lowered = token.lower()
-                if lowered.startswith(("here is", "here's", "translation", "the translation")):
-                    continue
-                first_real_token_seen = True
-
-            buffer_this_chunk += token
-            partial += token
-            yield partial
-
-        # --- 4. Save tail of translation for next‑chunk context ----------
-        # Keep roughly the last 120 words
-        prev_tail = " ".join((buffer_this_chunk.strip().split())[-120:]) + " "
-
-    # done streaming all chunks
 
 # ---------------------------------------------------------------------------
 # Line‑by‑line streaming version – expects `transcript_lines` as a list[str]
@@ -296,6 +224,142 @@ def english_translate_stream_lines(transcript_lines: List[str]):
         # Finished this list item – append a newline and yield
         partial += "  \n"
         yield partial
+
+
+# ---------------------------------------------------------------------------
+# Streaming helpers for vocab list, grammar points, and exercises
+# ---------------------------------------------------------------------------
+
+def get_vocab_stream(chunks: List[str]):
+    """
+    Same logic as get_vocab(), but streams the **final** consolidation step so
+    callers (Streamlit) can show a typing effect.  The per‑chunk extraction
+    remains synchronous; only the final LLM pass is streamed.
+    """
+    # 1 · non‑stream: extract vocab items from each chunk
+    llm_sync = OllamaLLM(model="gemma3", temperature=0)
+    template = (
+        "Text: {text}\n"
+        "Goal: You are a Dutch language expert. Extract a list of essential Dutch "
+        "vocabulary used in the given text. Avoid extracting people names or place names."
+    )
+    prompt = ChatPromptTemplate.from_template(template)
+    # original for‑loop kept for clarity
+    with st.spinner("Extracting vocabulary..."):
+        vocab_list = [ (prompt | llm_sync).invoke({"text": chunk}) for chunk in chunks ]
+        combined_vocab = " ".join(vocab_list)       
+
+    # 2 · stream: consolidate & translate vocab list
+    chat_llm = ChatOllama(model="gemma3", temperature=0)
+    sys_msg = (
+        "You are a Dutch language expert. For the given vocabulary list, "
+        "create a coherent single vocabulary list. "
+        "add the English translation for each word."
+        "Avoid repeating words and remove duplicates."
+        "Avoid using the word 'list' in the answer."
+        "NEVER add any introductory sentences or comments like 'OK, Here are the exercises'."
+        "NEVER ask follow-up questions and provide the requested information only."
+    )
+    messages = [
+        ("system", sys_msg),
+        ("user", combined_vocab),
+    ]
+
+    partial = ""
+    for msg_piece in chat_llm.stream(messages):
+        token = getattr(msg_piece, "content", "")
+        if token:
+            partial += token
+            yield partial
+
+
+def extract_grammar_stream(chunks: List[str]):
+    """
+    Stream the *explanation* phase of extract_grammar(); the initial extraction
+    per chunk stays synchronous.
+    """
+    # 1 · non‑stream: gather grammar tokens per chunk
+    llm_sync = OllamaLLM(model="gemma3:4b", temperature=0.2)
+    template = (
+        "Text: {text}\n"
+        "Goal: You are a Dutch grammar expert. Extract the key grammar points from "
+        "the given text. Provide an example from the text for each grammar point. "
+        "Answer: List the key grammar points separated by commas."
+    )
+    prompt = ChatPromptTemplate.from_template(template)
+    with st.spinner("Extracting grammar points..."):
+        grammar_list = [ (prompt | llm_sync).invoke({"text": chunk}).strip() for chunk in chunks ]
+
+        all_grammar = set()
+        for grammar in grammar_list:
+            all_grammar.update(t.strip() for t in grammar.split(",") if t.strip())
+
+        grammar_points = ", ".join(sorted(all_grammar))
+
+    # 2 · stream: explain grammar points
+    chat_llm = ChatOllama(model="gemma3:4b", temperature=0)
+    sys_msg = (
+        "You are a Dutch grammar expert."
+        "Provide a brief explanation for each grammar point and preserve the example from the text."
+        "do not omit or repeat anything."
+        "NEVER ask any follow-up questions"
+        "NEVER add any introductory sentences or comments like 'OK, Here are the' or 'Ok, Here's the'."
+        "**NEVER** add any questions starting with 'Do you want me to' or 'Would you like me to' at the end of your response."
+    )
+    messages = [
+        ("system", sys_msg),
+        ("user", grammar_points),
+    ]
+
+    partial = ""
+    for msg_piece in chat_llm.stream(messages):
+        token = getattr(msg_piece, "content", "")
+        if token:
+            partial += token
+            yield partial
+
+
+def create_exercises_stream(vocab_list: str, grammar_points: str):
+    """
+    Stream generation of exercises and answers based on vocab + grammar.
+    """
+    # num_predict tells Ollama how many tokens it may emit; raise it so the
+    # stream does not cut off after the first exercise block.
+    chat_llm = ChatOllama(
+        model="gemma3:4b",
+        temperature=0,
+        model_kwargs={"num_predict": 2048}  # allow up to ~2 k output tokens
+    )
+    sys_msg = (
+        "You are a Dutch language teacher. "
+        "Create a set of exercises to help students practice the given vocabulary and grammar points. "
+        "Include fill-in-the-blank, sentence construction, and multiple-choice questions."
+        "provide the answers for each exercise at the end."
+        "NEVER ask any follow-up questions and *ONLY* provide the exercises and answers."
+        "NEVER add any introductory sentences or comments like 'OK, Here are the exercises'."
+    )
+    user_msg = (
+        f"Vocabulary:\n{vocab_list}\n\nGrammar Points:\n{grammar_points}\n\n"
+        "Include fill-in-the-blank, sentence construction, and multiple-choice questions."
+        "provide the answers for each exercise at the end."
+        "NEVER ask any follow-up questions and *ONLY* provide the exercises and answers."
+        "Please produce the exercises now."
+    )
+
+    messages = [
+        ("system", sys_msg),
+        ("user", user_msg),
+    ]
+
+    partial = ""
+    for msg_piece in chat_llm.stream(messages):
+        token = getattr(msg_piece, "content", "")
+        if token:
+            partial += token
+            yield partial
+    # ensure the last token flushes any buffered markdown list
+    partial += "  \n"
+    yield partial
 
 def create_exercises(vocab_list, grammar_points):
     """

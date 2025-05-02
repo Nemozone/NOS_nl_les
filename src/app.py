@@ -87,7 +87,7 @@ def main():
             with st.spinner("Retrieving transcript..."):
                 video_id = parse_url(st.session_state.url)
                 transcript = get_text_from_video(video_id)
-                transcript_str = "  \n\n---  \n\n".join(transcript)
+                transcript_str = "  \n".join(transcript)
                 chunks = create_chunks(transcript)
             # -------- side‑by‑side transcript + translation ------------------
 

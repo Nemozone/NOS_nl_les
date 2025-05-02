@@ -133,7 +133,8 @@ def extract_grammar(chunks: list) -> str:
         Grammar points: {grammar_points}
         Goal: Provide a brief explanation for each grammar point and an example from the text.
         do not omit or repeat anything.
-        Avoid asking follow-up questions starting with "Do you want me to".
+        NEVER ask any follow-up questions
+        Never add any questions starting with "Do you want me to" at the end of your response.
         Answer: """
     )
     explanation_chain = explanation_prompt | llm
@@ -293,7 +294,7 @@ def english_translate_stream_lines(transcript_lines: List[str]):
             yield partial  # send each incremental token
 
         # Finished this list item – append a newline and yield
-        partial += "  \n\n---  \n\n"
+        partial += "  \n"
         yield partial
 
 def create_exercises(vocab_list, grammar_points):
@@ -313,7 +314,8 @@ def create_exercises(vocab_list, grammar_points):
     Goal: You are a Dutch language teacher. 
     Create a set of exercises to help students practice the given vocabulary and grammar points. 
     Include fill-in-the-blank, sentence construction, and multiple-choice questions.
-    Avoid asking follow-up questions and provide the exercises only.
+    provide the answers for each exercise at the end.
+    NEVER ask any follow-up questions and provide the exercises and answers only.
     Answer: """
 
     prompt = ChatPromptTemplate.from_template(template)
@@ -321,7 +323,7 @@ def create_exercises(vocab_list, grammar_points):
 
     exercises = chain.invoke({
         "vocab_list": vocab_list,
-        "grammar_points": ", ".join(grammar_points)
+        "grammar_points": grammar_points
     })
 
     return exercises

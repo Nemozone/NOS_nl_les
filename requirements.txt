@@ -1,0 +1,7 @@
+You will need the following contents for the requirements.txt file:
+
+streamlit
+youtube-transcript-api
+langchain
+tqdm
+concurrent.futures

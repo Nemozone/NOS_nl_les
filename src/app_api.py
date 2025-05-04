@@ -47,23 +47,15 @@ def main():
         st.header("API Keys")
         # Pre‑fill with any existing keys from env or session_state
         openai_default   = st.session_state.get("OPENAI_API_KEY",  os.getenv("OPENAI_API_KEY", ""))
-        youtube_default  = st.session_state.get("YOUTUBE_API_KEY", os.getenv("YOUTUBE_API_KEY", ""))
 
         openai_key  = st.text_input("OpenAI API Key",  value=openai_default,  type="password", placeholder="sk‑...")
-        yt_key      = st.text_input("YouTube API Key", value=youtube_default, type="password")
 
         if st.button("Save Keys"):
             if openai_key:
                 st.session_state["OPENAI_API_KEY"] = openai_key
                 os.environ["OPENAI_API_KEY"] = openai_key
-            if yt_key:
-                st.session_state["YOUTUBE_API_KEY"] = yt_key
-                os.environ["YOUTUBE_API_KEY"] = yt_key
             st.success("Keys saved! You may need to refresh the page.")
 
-    # Make sure the helper functions pick up any newly‑saved YouTube key
-    global YOUTUBE_API_KEY
-    YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
     st.title("NOS Journal Dutch Learning App")
     st.write("This app extracts the transcript from NOS Journaal in Makkelijke Taal and provides language learning exercises.")
 
@@ -80,8 +72,8 @@ def main():
     # ------------------------------------------------------------------
     # Require both keys before continuing
     # ------------------------------------------------------------------
-    if not os.environ.get("OPENAI_API_KEY") or not os.environ.get("YOUTUBE_API_KEY"):
-        st.info("Please provide both your OpenAI and YouTube API keys in the sidebar. The app will start once both keys are saved.")
+    if not os.environ.get("OPENAI_API_KEY"):
+        st.info("Please provide your OpenAI API key in the sidebar. The app will start once the key is saved.")
         st.stop()
 
     # ------------------------------------------------------------------

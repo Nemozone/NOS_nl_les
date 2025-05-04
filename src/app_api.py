@@ -57,11 +57,13 @@ def main():
                     # Make the key available to OpenAI client inside this session only
                     os.environ["OPENAI_API_KEY"] = openai_key
                     st.success("Key saved for this session.")
-                    # Rerun the script if supported; otherwise prompt the user
+                    # Trigger a rerun so the main app picks up the new key
                     if hasattr(st, "rerun"):
                         st.rerun()
+                    elif hasattr(st, "experimental_rerun"):
+                        st.experimental_rerun()
                     else:
-                        st.warning("Please refresh the page to continue.")
+                        st.warning("Key saved – please refresh the page.")
         else:
             st.success("OpenAI key saved for this session.")
 

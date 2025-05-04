@@ -42,11 +42,10 @@ def get_top_videos(channel_id: str, max_results: int = 5):
 
 def main():
     st.set_page_config(layout="wide")
-    # ---------------- Sidebar: ask for OpenAI key only if missing ----------------
+    # ---------------- Sidebar: per‑user OpenAI key ----------------
     with st.sidebar:
         st.header("Configuration")
-
-        if "OPENAI_API_KEY" not in os.environ:
+        if "user_openai_api_key" not in st.session_state:
             openai_key = st.text_input(
                 "Enter your OpenAI API Key",
                 type="password",
@@ -54,13 +53,13 @@ def main():
             )
             if st.button("Save Key"):
                 if openai_key:
-                    # Persist just for this process; never send it back to the client again
+                    st.session_state["user_openai_api_key"] = openai_key
+                    # Make the key available to OpenAI client inside this session only
                     os.environ["OPENAI_API_KEY"] = openai_key
-                    st.session_state["OPENAI_API_KEY"] = openai_key
-                    st.success("Key saved! Please reload the page.")
+                    st.success("Key saved for this session.")
                     st.experimental_rerun()
         else:
-            st.success("OpenAI key is configured on the server.")
+            st.success("OpenAI key saved for this session.")
 
     st.title("NOS Journal Dutch Learning App")
     st.write("This app extracts the transcript from NOS Journaal in Makkelijke Taal and provides language learning exercises.")
@@ -76,10 +75,10 @@ def main():
         st.session_state.video_titles = []
 
     # ------------------------------------------------------------------
-    # Require both keys before continuing
+    # Require per-user key before continuing
     # ------------------------------------------------------------------
-    if not os.environ.get("OPENAI_API_KEY"):
-        st.info("Please provide your OpenAI API key in the sidebar. The app will start once the key is saved.")
+    if "user_openai_api_key" not in st.session_state:
+        st.info("Please enter your OpenAI API key in the sidebar to start.")
         st.stop()
 
     # ------------------------------------------------------------------

@@ -42,19 +42,25 @@ def get_top_videos(channel_id: str, max_results: int = 5):
 
 def main():
     st.set_page_config(layout="wide")
-    # ---------------- Sidebar for user‑supplied API keys ----------------
+    # ---------------- Sidebar: ask for OpenAI key only if missing ----------------
     with st.sidebar:
-        st.header("API Keys")
-        # Pre‑fill with any existing keys from env or session_state
-        openai_default   = st.session_state.get("OPENAI_API_KEY",  os.getenv("OPENAI_API_KEY", ""))
+        st.header("Configuration")
 
-        openai_key  = st.text_input("OpenAI API Key",  value=openai_default,  type="password", placeholder="sk‑...")
-
-        if st.button("Save Keys"):
-            if openai_key:
-                st.session_state["OPENAI_API_KEY"] = openai_key
-                os.environ["OPENAI_API_KEY"] = openai_key
-            st.success("Keys saved! You may need to refresh the page.")
+        if "OPENAI_API_KEY" not in os.environ:
+            openai_key = st.text_input(
+                "Enter your OpenAI API Key",
+                type="password",
+                placeholder="sk‑..."
+            )
+            if st.button("Save Key"):
+                if openai_key:
+                    # Persist just for this process; never send it back to the client again
+                    os.environ["OPENAI_API_KEY"] = openai_key
+                    st.session_state["OPENAI_API_KEY"] = openai_key
+                    st.success("Key saved! Please reload the page.")
+                    st.experimental_rerun()
+        else:
+            st.success("OpenAI key is configured on the server.")
 
     st.title("NOS Journal Dutch Learning App")
     st.write("This app extracts the transcript from NOS Journaal in Makkelijke Taal and provides language learning exercises.")

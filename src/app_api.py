@@ -42,6 +42,28 @@ def get_top_videos(channel_id: str, max_results: int = 5):
 
 def main():
     st.set_page_config(layout="wide")
+    # ---------------- Sidebar for user‑supplied API keys ----------------
+    with st.sidebar:
+        st.header("API Keys")
+        # Pre‑fill with any existing keys from env or session_state
+        openai_default   = st.session_state.get("OPENAI_API_KEY",  os.getenv("OPENAI_API_KEY", ""))
+        youtube_default  = st.session_state.get("YOUTUBE_API_KEY", os.getenv("YOUTUBE_API_KEY", ""))
+
+        openai_key  = st.text_input("OpenAI API Key",  value=openai_default,  type="password", placeholder="sk‑...")
+        yt_key      = st.text_input("YouTube API Key", value=youtube_default, type="password")
+
+        if st.button("Save Keys"):
+            if openai_key:
+                st.session_state["OPENAI_API_KEY"] = openai_key
+                os.environ["OPENAI_API_KEY"] = openai_key
+            if yt_key:
+                st.session_state["YOUTUBE_API_KEY"] = yt_key
+                os.environ["YOUTUBE_API_KEY"] = yt_key
+            st.success("Keys saved! You may need to refresh the page.")
+
+    # Make sure the helper functions pick up any newly‑saved YouTube key
+    global YOUTUBE_API_KEY
+    YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
     st.title("NOS Journal Dutch Learning App")
     st.write("This app extracts the transcript from NOS Journaal in Makkelijke Taal and provides language learning exercises.")
 
@@ -54,6 +76,13 @@ def main():
         st.session_state.videos = []
     if 'video_titles' not in st.session_state:
         st.session_state.video_titles = []
+
+    # ------------------------------------------------------------------
+    # Require both keys before continuing
+    # ------------------------------------------------------------------
+    if not os.environ.get("OPENAI_API_KEY") or not os.environ.get("YOUTUBE_API_KEY"):
+        st.info("Please provide both your OpenAI and YouTube API keys in the sidebar. The app will start once both keys are saved.")
+        st.stop()
 
     # ------------------------------------------------------------------
     # Load top 5 videos for the predefined channel on first run

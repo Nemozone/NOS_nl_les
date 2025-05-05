@@ -12,6 +12,7 @@ from langchain.agents import initialize_agent, AgentType
 import openai
 from openai import OpenAI as OpenAIClient  # new client for ≥1.0 SDK
 import yt_dlp
+from yt_dlp.utils import DownloadError
 import tempfile
 from tqdm import tqdm
 from dotenv import load_dotenv
@@ -59,11 +60,15 @@ def whisper_transcribe_video(url: str) -> List[str]:
     OpenAI Whisper (model="whisper-1").
 
     Args:
-        url (str): full YouTube video URL
+        url (str): full YouTube video URL **or** bare video‑ID.
 
     Returns:
-        List[str]: the transcript split into sentence-like lines.
+        List[str]: the transcript split into sentence‑like lines.
     """
+    # Accept bare video IDs
+    if "youtube.com" not in url and "youtu.be" not in url:
+        url = f"https://www.youtube.com/watch?v={url}"
+
     # ---- OpenAI client --------------------------------------------------
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -76,26 +81,34 @@ def whisper_transcribe_video(url: str) -> List[str]:
         "quiet": True,
         "outtmpl": "%(id)s.%(ext)s",
         "noplaylist": True,
+        "cookiefile": None,
+        "nocheckcertificate": True,
+        "skip_unavailable_fragments": True,
     }
+
     with tempfile.TemporaryDirectory() as tmpdir:
         ydl_opts["outtmpl"] = f"{tmpdir}/%(id)s.%(ext)s"
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            audio_path = ydl.prepare_filename(info)
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                audio_path = ydl.prepare_filename(info)
+        except DownloadError as e:
+            raise RuntimeError(
+                "YouTube blocked the download (captcha, age‑gate, or bot check). "
+                "Try a different video or run the app locally."
+            ) from e
 
         # ---- Whisper transcription -------------------------------------
         with open(audio_path, "rb") as f:
-            result = client.audio.transcriptions.create(
+            text = client.audio.transcriptions.create(
                 model="whisper-1",
                 file=f,
-            )
-        text: str = result.text
+            ).text
 
     # ---- Basic sentence splitting -------------------------------------
-    lines = [ln.strip() for ln in text.replace("\r", "\n").split("\n") if ln.strip()]
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     if not lines:
         lines = [s.strip() for s in text.split(".") if s.strip()]
-
     return lines
 
 

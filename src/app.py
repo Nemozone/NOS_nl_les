@@ -11,32 +11,51 @@ CHANNEL_ID = "UCch2JvY2ZSwcjf5gb93HGQw"
 
 def get_top_videos(channel_id: str, max_results: int = 5):
     """
-    Return a list with the `max_results` most‑viewed videos from the given
-    YouTube channel.  Each element is a dict: {"title": str, "video_id": str}.
+    Return a list with the `max_results` most‑recent uploads from the given
+    YouTube channel.  Each element is a dict: {"title", "video_id", "thumbnail"}.
+    This uses only 2 quota units (channels.list + playlistItems.list).
     """
-    url = (
-        "https://www.googleapis.com/youtube/v3/search"
-        f"?key={YOUTUBE_API_KEY}"
-        f"&channelId={channel_id}"
-        f"&part=snippet"
-        f"&order=viewCount"
-        f"&maxResults={max_results}"
-        f"&type=video"
+    if not YOUTUBE_API_KEY:
+        raise RuntimeError("YOUTUBE_API_KEY missing (set in .env or Streamlit Secrets)")
+
+    # 1 · get the channel's uploads playlist ID (1 unit)
+    resp = requests.get(
+        "https://www.googleapis.com/youtube/v3/channels",
+        params=dict(
+            part="contentDetails",
+            id=channel_id,
+            key=YOUTUBE_API_KEY,
+        ),
+        timeout=10,
     )
-    response = requests.get(url, timeout=10)
-    response.raise_for_status()
-    data = response.json()
+    resp.raise_for_status()
+    uploads_id = resp.json()["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+
+    # 2 · fetch the latest uploads (playlistItems are returned newest‑first) (1 unit)
+    resp = requests.get(
+        "https://www.googleapis.com/youtube/v3/playlistItems",
+        params=dict(
+            part="snippet",
+            playlistId=uploads_id,
+            maxResults=max_results,
+            key=YOUTUBE_API_KEY,
+        ),
+        timeout=10,
+    )
+    resp.raise_for_status()
+    items = resp.json()["items"]
+
     videos = [
         {
-            "title": item["snippet"]["title"],
-            "video_id": item["id"]["videoId"],
+            "title": it["snippet"]["title"],
+            "video_id": it["snippet"]["resourceId"]["videoId"],
             "thumbnail": (
-                item["snippet"]["thumbnails"].get("high") or
-                item["snippet"]["thumbnails"].get("medium") or
-                item["snippet"]["thumbnails"]["default"]
+                it["snippet"]["thumbnails"].get("high")
+                or it["snippet"]["thumbnails"].get("medium")
+                or it["snippet"]["thumbnails"]["default"]
             )["url"],
         }
-        for item in data.get("items", [])
+        for it in items
     ]
     return videos
 

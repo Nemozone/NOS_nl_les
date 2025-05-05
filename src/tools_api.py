@@ -1,10 +1,18 @@
 from youtube_transcript_api import YouTubeTranscriptApi
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain.tools import Tool
+from langchain.agents import initialize_agent, AgentType
+import streamlit as st
 import os  
 from langchain_openai import ChatOpenAI, OpenAI  # switched to OpenAI models
 from langchain.tools import Tool
 from langchain.agents import initialize_agent, AgentType
+import openai
+from openai import OpenAI as OpenAIClient  # new client for ≥1.0 SDK
+import yt_dlp
+import tempfile
 from tqdm import tqdm
 from dotenv import load_dotenv
 
@@ -44,6 +52,52 @@ def get_text_from_video(url: str) -> str:
     video_id = parse_url(url)
     transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['nl', 'en'])
     return [entry['text'] for entry in transcript]
+
+def whisper_transcribe_video(url: str) -> List[str]:
+    """
+    Download the audio track of a YouTube video and transcribe it with
+    OpenAI Whisper (model="whisper-1").
+
+    Args:
+        url (str): full YouTube video URL
+
+    Returns:
+        List[str]: the transcript split into sentence-like lines.
+    """
+    # ---- OpenAI client --------------------------------------------------
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not set.")
+    client = OpenAIClient(api_key=api_key)
+
+    # ---- Download audio with yt‑dlp ------------------------------------
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "quiet": True,
+        "outtmpl": "%(id)s.%(ext)s",
+        "noplaylist": True,
+    }
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ydl_opts["outtmpl"] = f"{tmpdir}/%(id)s.%(ext)s"
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            audio_path = ydl.prepare_filename(info)
+
+        # ---- Whisper transcription -------------------------------------
+        with open(audio_path, "rb") as f:
+            result = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+            )
+        text: str = result.text
+
+    # ---- Basic sentence splitting -------------------------------------
+    lines = [ln.strip() for ln in text.replace("\r", "\n").split("\n") if ln.strip()]
+    if not lines:
+        lines = [s.strip() for s in text.split(".") if s.strip()]
+
+    return lines
+
 
 def create_chunks(transcript_text: str) -> list:
     """

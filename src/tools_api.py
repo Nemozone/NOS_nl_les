@@ -195,8 +195,10 @@ def get_vocab_stream(chunks: List[str]):
     llm_sync = ChatOpenAI(model="gpt-4o-mini", temperature=0)  # chat completions endpoint
     template = (
         "Text: {text}\n"
-        "Goal: You are a Dutch language expert. Extract a list of essential Dutch "
+        "Goal: You are a Dutch language expert. Extract a unique list of essential Dutch "
         "vocabulary used in the given text. Avoid extracting people names or place names."
+        "NEVER extract duplicate words, conjunctions, or prepositions."
+        "**ONLY** provide the most essential vocabulary words."
     )
     prompt = ChatPromptTemplate.from_template(template)
     # original for‑loop kept for clarity

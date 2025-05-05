@@ -5,38 +5,65 @@ import requests
 from dotenv import load_dotenv
 
 load_dotenv()
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")  # stored in Streamlit secrets or .env
 # Hard‑coded channel we want to show on startup
 CHANNEL_ID = "UCch2JvY2ZSwcjf5gb93HGQw"
 
 def get_top_videos(channel_id: str, max_results: int = 5):
     """
-    Return a list with the `max_results` most‑viewed videos from the given
+    Return a list with the `max_results` most-recent videos from the given
     YouTube channel.  Each element is a dict: {"title": str, "video_id": str}.
     """
-    url = (
-        "https://www.googleapis.com/youtube/v3/search"
-        f"?key={YOUTUBE_API_KEY}"
-        f"&channelId={channel_id}"
-        f"&part=snippet"
-        f"&order=viewCount"
-        f"&maxResults={max_results}"
-        f"&type=video"
+    if not YOUTUBE_API_KEY:
+        raise RuntimeError("Server‑side YOUTUBE_API_KEY missing.")
+
+    # 1. fetch channel details to get uploads playlist (1 unit)
+    resp = requests.get(
+        "https://www.googleapis.com/youtube/v3/channels",
+        params=dict(
+            part="contentDetails",
+            id=channel_id,
+            key=YOUTUBE_API_KEY,
+        ),
+        timeout=10,
     )
-    response = requests.get(url, timeout=10)
-    response.raise_for_status()
-    data = response.json()
+    resp.raise_for_status()
+    uploads_id = resp.json()["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+
+    # 2. get first 50 videos in uploads playlist (1 unit)
+    resp = requests.get(
+        "https://www.googleapis.com/youtube/v3/playlistItems",
+        params=dict(
+            part="snippet",
+            playlistId=uploads_id,
+            maxResults=50,
+            key=YOUTUBE_API_KEY,
+        ),
+        timeout=10,
+    )
+    resp.raise_for_status()
+    items = resp.json()["items"]
+
+    # sort playlist items by published date (newest first)
+    items.sort(
+        key=lambda i: i["snippet"]["publishedAt"],
+        reverse=True
+    )
+
+    # keep only the first `max_results`
+    recent_items = items[:max_results]
+
     videos = [
         {
-            "title": item["snippet"]["title"],
-            "video_id": item["id"]["videoId"],
+            "title": i["snippet"]["title"],
+            "video_id": i["snippet"]["resourceId"]["videoId"],
             "thumbnail": (
-                item["snippet"]["thumbnails"].get("high") or
-                item["snippet"]["thumbnails"].get("medium") or
-                item["snippet"]["thumbnails"]["default"]
+                i["snippet"]["thumbnails"].get("high")
+                or i["snippet"]["thumbnails"].get("medium")
+                or i["snippet"]["thumbnails"]["default"]
             )["url"],
         }
-        for item in data.get("items", [])
+        for i in recent_items
     ]
     return videos
 
@@ -118,7 +145,7 @@ def main():
         if st.button("Generate Dutch Lesson"):
             with st.spinner("Retrieving transcript..."):
                 video_id = parse_url(st.session_state.url)
-                transcript = get_text_from_video(video_id)
+                transcript = whisper_transcribe_video(video_id)
                 transcript_str = "  \n".join(transcript)
                 chunks = create_chunks(transcript)
             # -------- side‑by‑side transcript + translation ------------------

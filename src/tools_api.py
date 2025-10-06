@@ -130,7 +130,6 @@ def whisper_transcribe_video(url: str) -> List[str]:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         ydl_opts["outtmpl"] = f"{tmpdir}/%(id)s.%(ext)s"
-        
         try:
             # Try different format combinations
             format_options = [

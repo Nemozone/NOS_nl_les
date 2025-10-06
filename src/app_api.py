@@ -5,56 +5,94 @@ import requests
 from dotenv import load_dotenv
 
 load_dotenv()
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")  # stored in Streamlit secrets or .env
 # Hard‑coded channel we want to show on startup
 CHANNEL_ID = "UCch2JvY2ZSwcjf5gb93HGQw"
 
 def get_top_videos(channel_id: str, max_results: int = 5):
     """
-    Return a list with the `max_results` most‑viewed videos from the given
+    Return a list with the `max_results` most-recent videos from the given
     YouTube channel.  Each element is a dict: {"title": str, "video_id": str}.
     """
-    url = (
-        "https://www.googleapis.com/youtube/v3/search"
-        f"?key={YOUTUBE_API_KEY}"
-        f"&channelId={channel_id}"
-        f"&part=snippet"
-        f"&order=viewCount"
-        f"&maxResults={max_results}"
-        f"&type=video"
+    if not YOUTUBE_API_KEY:
+        raise RuntimeError("Server‑side YOUTUBE_API_KEY missing.")
+
+    # 1. fetch channel details to get uploads playlist (1 unit)
+    resp = requests.get(
+        "https://www.googleapis.com/youtube/v3/channels",
+        params=dict(
+            part="contentDetails",
+            id=channel_id,
+            key=YOUTUBE_API_KEY,
+        ),
+        timeout=10,
     )
-    response = requests.get(url, timeout=10)
-    response.raise_for_status()
-    data = response.json()
+    resp.raise_for_status()
+    uploads_id = resp.json()["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+
+    # 2. get first 50 videos in uploads playlist (1 unit)
+    resp = requests.get(
+        "https://www.googleapis.com/youtube/v3/playlistItems",
+        params=dict(
+            part="snippet",
+            playlistId=uploads_id,
+            maxResults=50,
+            key=YOUTUBE_API_KEY,
+        ),
+        timeout=10,
+    )
+    resp.raise_for_status()
+    items = resp.json()["items"]
+
+    # sort playlist items by published date (newest first)
+    items.sort(
+        key=lambda i: i["snippet"]["publishedAt"],
+        reverse=True
+    )
+
+    # keep only the first `max_results`
+    recent_items = items[:max_results]
+
     videos = [
         {
-            "title": item["snippet"]["title"],
-            "video_id": item["id"]["videoId"],
+            "title": i["snippet"]["title"],
+            "video_id": i["snippet"]["resourceId"]["videoId"],
             "thumbnail": (
-                item["snippet"]["thumbnails"].get("high") or
-                item["snippet"]["thumbnails"].get("medium") or
-                item["snippet"]["thumbnails"]["default"]
+                i["snippet"]["thumbnails"].get("high")
+                or i["snippet"]["thumbnails"].get("medium")
+                or i["snippet"]["thumbnails"]["default"]
             )["url"],
         }
-        for item in data.get("items", [])
+        for i in recent_items
     ]
     return videos
 
 def main():
     st.set_page_config(layout="wide")
-    # ---------------- Sidebar for user‑supplied API keys ----------------
+    # ---------------- Sidebar: per‑user OpenAI key ----------------
     with st.sidebar:
-        st.header("API Keys")
-        # Pre‑fill with any existing keys from env or session_state
-        openai_default   = st.session_state.get("OPENAI_API_KEY",  os.getenv("OPENAI_API_KEY", ""))
-
-        openai_key  = st.text_input("OpenAI API Key",  value=openai_default,  type="password", placeholder="sk‑...")
-
-        if st.button("Save Keys"):
-            if openai_key:
-                st.session_state["OPENAI_API_KEY"] = openai_key
-                os.environ["OPENAI_API_KEY"] = openai_key
-            st.success("Keys saved! You may need to refresh the page.")
+        st.header("Configuration")
+        if "user_openai_api_key" not in st.session_state:
+            openai_key = st.text_input(
+                "Enter your OpenAI API Key",
+                type="password",
+                placeholder="sk‑..."
+            )
+            if st.button("Save Key"):
+                if openai_key:
+                    st.session_state["user_openai_api_key"] = openai_key
+                    # Make the key available to OpenAI client inside this session only
+                    os.environ["OPENAI_API_KEY"] = openai_key
+                    st.success("Key saved for this session.")
+                    # Trigger a rerun so the main app picks up the new key
+                    if hasattr(st, "rerun"):
+                        st.rerun()
+                    elif hasattr(st, "experimental_rerun"):
+                        st.experimental_rerun()
+                    else:
+                        st.warning("Key saved – please refresh the page.")
+        else:
+            st.success("OpenAI key saved for this session.")
 
     st.title("NOS Journal Dutch Learning App")
     st.write("This app extracts the transcript from NOS Journaal in Makkelijke Taal and provides language learning exercises.")
@@ -70,10 +108,10 @@ def main():
         st.session_state.video_titles = []
 
     # ------------------------------------------------------------------
-    # Require both keys before continuing
+    # Require per-user key before continuing
     # ------------------------------------------------------------------
-    if not os.environ.get("OPENAI_API_KEY"):
-        st.info("Please provide your OpenAI API key in the sidebar. The app will start once the key is saved.")
+    if "user_openai_api_key" not in st.session_state:
+        st.info("Please enter your OpenAI API key in the sidebar to start.")
         st.stop()
 
     # ------------------------------------------------------------------
@@ -107,7 +145,7 @@ def main():
         if st.button("Generate Dutch Lesson"):
             with st.spinner("Retrieving transcript..."):
                 video_id = parse_url(st.session_state.url)
-                transcript = get_text_from_video(video_id)
+                transcript = whisper_transcribe_video(video_id)
                 transcript_str = "  \n".join(transcript)
                 chunks = create_chunks(transcript)
             # -------- side‑by‑side transcript + translation ------------------

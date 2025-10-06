@@ -1,10 +1,19 @@
 from youtube_transcript_api import YouTubeTranscriptApi
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain.tools import Tool
+from langchain.agents import initialize_agent, AgentType
+import streamlit as st
 import os  
 from langchain_openai import ChatOpenAI, OpenAI  # switched to OpenAI models
 from langchain.tools import Tool
 from langchain.agents import initialize_agent, AgentType
+import openai
+from openai import OpenAI as OpenAIClient  # new client for ≥1.0 SDK
+import yt_dlp
+from yt_dlp.utils import DownloadError
+import tempfile
 from tqdm import tqdm
 from dotenv import load_dotenv
 
@@ -44,6 +53,133 @@ def get_text_from_video(url: str) -> str:
     video_id = parse_url(url)
     transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['nl', 'en'])
     return [entry['text'] for entry in transcript]
+
+def whisper_transcribe_video(url: str) -> List[str]:
+    """
+    Download the audio track of a YouTube video and transcribe it with
+    OpenAI Whisper (model="whisper-1").
+
+    Args:
+        url (str): full YouTube video URL **or** bare video‑ID.
+
+    Returns:
+        List[str]: the transcript split into sentence‑like lines.
+
+    Raises:
+        RuntimeError: If OpenAI key is missing or YouTube download fails
+        ValueError: If the URL/video ID is invalid
+    """
+    # Accept bare video IDs
+    if "youtube.com" not in url and "youtu.be" not in url:
+        url = f"https://www.youtube.com/watch?v={url}"
+
+    # ---- OpenAI client --------------------------------------------------
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not set.")
+    client = OpenAIClient(api_key=api_key)
+
+    # ---- Download audio with yt‑dlp ------------------------------------
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "quiet": True,
+        "no_warnings": True,
+        "outtmpl": "%(id)s.%(ext)s",
+        "noplaylist": True,
+        # Enhanced options for better download success
+        "cookiefile": None,
+        "nocheckcertificate": True,
+        "skip_unavailable_fragments": True,
+        "ignoreerrors": True,
+        "no_check_certificate": True,
+        "prefer_insecure": True,
+        "geo_bypass": True,
+        "geo_bypass_country": "NL",  # Try from Netherlands IP
+        "extract_audio": True,  # Make sure we only get audio
+        # Add some HTTP headers to look more like a browser
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-us,en;q=0.5",
+        }
+    }
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ydl_opts["outtmpl"] = f"{tmpdir}/%(id)s.%(ext)s"
+        
+        try:
+            # First try: attempt to get transcript directly
+            try:
+                transcript = get_text_from_video(url)
+                if transcript:
+                    return transcript
+            except Exception:
+                # If transcript fails, continue with whisper transcription
+                pass
+
+            # Second try: download and transcribe
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                audio_path = ydl.prepare_filename(info)
+
+                # Verify the file exists and has content
+                if not os.path.exists(audio_path) or os.path.getsize(audio_path) == 0:
+                    raise ValueError("Downloaded audio file is empty or missing")
+
+                # ---- Whisper transcription -------------------------------------
+                with open(audio_path, "rb") as f:
+                    text = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=f,
+                        language="nl",  # Specify Dutch language
+                        prompt="This is a Dutch news broadcast transcript",  # Help guide the model
+                    ).text
+
+        except DownloadError as e:
+            # Provide more specific error information
+            error_msg = str(e)
+            if "age-restricted" in error_msg.lower():
+                raise RuntimeError("This video is age-restricted and cannot be accessed.") from e
+            elif "private video" in error_msg.lower():
+                raise RuntimeError("This video is private and cannot be accessed.") from e
+            else:
+                raise RuntimeError(
+                    "YouTube blocked the download (captcha or region restriction). "
+                    "Please try:\n"
+                    "1. A different video\n"
+                    "2. Running the app locally\n"
+                    "3. Using a VPN with a Netherlands location"
+                ) from e
+        except Exception as e:
+            raise RuntimeError(f"Failed to process video: {str(e)}") from e
+
+        # ---- Basic sentence splitting -------------------------------------
+        # More robust sentence splitting
+        text = text.replace('\n', ' ').replace('\r', ' ')
+        sentences = []
+        
+        # Split by common Dutch sentence terminators
+        for sentence in text.split('.'):
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+                
+            # Further split by other terminators but keep them together
+            for subsent in sentence.split('!'):
+                subsent = subsent.strip()
+                if subsent:
+                    sentences.append(f"{subsent}!")
+            for subsent in sentence.split('?'):
+                subsent = subsent.strip()
+                if subsent:
+                    sentences.append(f"{subsent}?")
+                    
+        # If no sentences were found, fall back to original line splitting
+        if not sentences:
+            sentences = [ln.strip() for ln in text.splitlines() if ln.strip()]
+            
+        return sentences
+
 
 def create_chunks(transcript_text: str) -> list:
     """
@@ -128,8 +264,10 @@ def get_vocab_stream(chunks: List[str]):
     llm_sync = ChatOpenAI(model="gpt-4o-mini", temperature=0)  # chat completions endpoint
     template = (
         "Text: {text}\n"
-        "Goal: You are a Dutch language expert. Extract a list of essential Dutch "
+        "Goal: You are a Dutch language expert. Extract a unique list of essential Dutch "
         "vocabulary used in the given text. Avoid extracting people names or place names."
+        "NEVER extract duplicate words, conjunctions, or prepositions."
+        "**ONLY** provide the most essential vocabulary words."
     )
     prompt = ChatPromptTemplate.from_template(template)
     # original for‑loop kept for clarity
